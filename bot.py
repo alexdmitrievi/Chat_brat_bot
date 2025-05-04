@@ -10,12 +10,9 @@ from datetime import datetime
 from PIL import Image
 from pdf2image import convert_from_path
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-
-# Чтение токена из переменной окружения
 API_TOKEN = os.getenv("BOT_TOKEN")
-print("✅ BOT_TOKEN loaded:", bool(API_TOKEN), "| Value:", API_TOKEN)
+print("✅ BOT_TOKEN loaded:", bool(API_TOKEN))  # Для отладки
+logging.basicConfig(level=logging.INFO)
 
 if not API_TOKEN:
     raise ValueError("❌ Переменная BOT_TOKEN не установлена! Проверь секреты Fly.io.")
@@ -24,7 +21,7 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 user_sessions = {}
 
-# Расширенный справочник ТН ВЭД
+# Расширенный справочник ТН ВЭД (35+ позиций)
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
     "огурцы": ("0707 00 190 0", "Нужна", "Да"),
@@ -68,14 +65,16 @@ def extract_text_from_file(file_path):
     if file_path.endswith('.pdf'):
         images = convert_from_path(file_path)
         for image in images:
-            text += pytesseract.image_to_string(image, lang='rus+eng') + "\n"
+            text += pytesseract.image_to_string(image, lang='rus+eng') + "
+"
     elif file_path.lower().endswith(('.jpg', '.jpeg', '.png')):
         image = Image.open(file_path)
         text = pytesseract.image_to_string(image, lang='rus+eng')
     return text
 
 def parse_lines(text):
-    lines = text.split("\n")
+    lines = text.split("
+")
     data = []
     for line in lines:
         if any(word in line.lower() for word in catalog.keys()):
@@ -160,8 +159,12 @@ async def handle_zip(message: types.Message):
         return
 
     user_sessions[uid] = result_data
-    preview = "\n".join([f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}" for x in result_data])
-    await message.answer(f"✅ Найдено {len(result_data)} позиций:\n{preview}\n\nНапиши 'готово' для генерации Excel.")
+    preview = "
+".join([f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}" for x in result_data])
+    await message.answer(f"✅ Найдено {len(result_data)} позиций:
+{preview}
+
+Напиши 'готово' для генерации Excel.")
 
 @dp.message_handler(lambda msg: msg.from_user.id in user_sessions and msg.text.lower() == "готово")
 async def export_excel(message: types.Message):
