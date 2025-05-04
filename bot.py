@@ -65,8 +65,8 @@ def extract_text_from_file(file_path):
     if file_path.endswith('.pdf'):
         images = convert_from_path(file_path)
         for image in images:
-            text += pytesseract.image_to_string(image, lang='rus+eng')
-"
+        text += pytesseract.image_to_string(image, lang='rus+eng') + "\n"
+
     elif file_path.lower().endswith(('.jpg', '.jpeg', '.png')):
         image = Image.open(file_path)
         text = pytesseract.image_to_string(image, lang='rus+eng')
