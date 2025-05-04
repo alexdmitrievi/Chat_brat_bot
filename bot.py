@@ -73,8 +73,7 @@ def extract_text_from_file(file_path):
     return text
 
 def parse_lines(text):
-    lines = text.split("
-")
+lines = text.split("\n")
     data = []
     for line in lines:
         if any(word in line.lower() for word in catalog.keys()):
@@ -159,8 +158,7 @@ async def handle_zip(message: types.Message):
         return
 
     user_sessions[uid] = result_data
-    preview = "
-".join([f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}" for x in result_data])
+    preview = "\n".join([f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}" for x in result_data])
     await message.answer(f"✅ Найдено {len(result_data)} позиций:
 {preview}
 
