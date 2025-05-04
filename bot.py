@@ -5,15 +5,14 @@ import pytesseract
 import pandas as pd
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.executor import start_polling
 from datetime import datetime
 from PIL import Image
 from pdf2image import convert_from_path
 
 API_TOKEN = os.getenv("BOT_TOKEN")
-print("✅ BOT_TOKEN loaded:", bool(API_TOKEN))
 logging.basicConfig(level=logging.INFO)
+print("✅ BOT_TOKEN loaded:", bool(API_TOKEN))
 
 if not API_TOKEN:
     raise ValueError("❌ Переменная BOT_TOKEN не установлена! Проверь Render Secrets.")
@@ -22,13 +21,13 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 user_sessions = {}
 
-# Telegram menu button
+# Telegram menu
 async def on_startup(_):
     await bot.set_my_commands([
-        types.BotCommand(command="/start", description="🔁 Перезапустить бота")
+        types.BotCommand(command="/start", description="🔁 Перезапуск бота")
     ])
 
-# Каталог ТН ВЭД
+# Справочник ТН ВЭД
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
     "огурцы": ("0707 00 190 0", "Нужна", "Да"),
@@ -71,22 +70,26 @@ def extract_text_from_file(file_path):
     text = ""
     if file_path.endswith('.pdf'):
         images = convert_from_path(file_path)
-        for image in images:
+        for i, image in enumerate(images):
             ocr = pytesseract.image_to_string(image, lang='rus+eng')
-            print(f"[OCR PDF page] {ocr}")
+            print(f"\n[OCR PDF page {i+1}]\n{ocr}")
             text += ocr + "\n"
     elif file_path.lower().endswith(('.jpg', '.jpeg', '.png')):
         image = Image.open(file_path)
         ocr = pytesseract.image_to_string(image, lang='rus+eng')
-        print(f"[OCR Image] {ocr}")
+        print(f"\n[OCR Image]\n{ocr}")
         text += ocr
     return text
 
-def parse_lines(text):
+def parse_ocr_lines(text):
     lines = text.split("\n")
     data = []
     for line in lines:
-        if any(word in line.lower() for word in catalog.keys()):
+        line = line.strip()
+        if not line:
+            continue
+        print(f"[Line] {line}")
+        if any(key in line.lower() for key in catalog):
             parts = line.split()
             try:
                 weight = float([p for p in parts if "кг" in p.lower()][0].replace("кг", "").replace(",", "."))
@@ -100,10 +103,10 @@ def parse_lines(text):
                 places = int([p for p in parts if p.isdigit()][-1])
             except:
                 places = 0
-            name = line.lower()
             for key in catalog:
-                if key in name:
+                if key in line.lower():
                     tnved, trts, st1 = catalog[key]
+                    print(f"[Match] {key} | {weight} кг | ${price} | {places} мест")
                     data.append({
                         "Наименование товара": key,
                         "Код ТН ВЭД": tnved,
@@ -116,10 +119,41 @@ def parse_lines(text):
                     break
     return data
 
+def parse_excel_table(path):
+    try:
+        df = pd.read_excel(path, skiprows=40)
+    except:
+        df = pd.read_excel(path)
+    print("[Excel columns]", df.columns.tolist())
+    data = []
+    for i, row in df.iterrows():
+        name = str(row.get("Unnamed: 1", "")).lower()
+        if not any(key in name for key in catalog):
+            continue
+        tnved = str(row.get("Unnamed: 2", "не найден"))
+        weight = float(row.get("Unnamed: 9", 0))
+        price = float(row.get("Unnamed: 10", 0))
+        amount = float(row.get("Unnamed: 11", 0))
+        places = int(row.get("Unnamed: 4", 0))
+        match = next((key for key in catalog if key in name), None)
+        if match:
+            code, trts, st1 = catalog[match]
+            tnved = code
+            data.append({
+                "Наименование товара": match,
+                "Код ТН ВЭД": tnved,
+                "Вес (кг)": weight,
+                "Стоимость ($)": amount,
+                "Количество мест": places,
+                "ТР ТС 021/2011": trts,
+                "СТ-1": st1
+            })
+    return data
+
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
     user_sessions[message.from_user.id] = []
-    await message.answer("👋 Привет! Отправь ZIP-архив с инвойсом (Excel, PDF или JPG/PNG). Я распознаю содержимое и подготовлю Excel-декларацию.")
+    await message.answer("📦 Отправь ZIP-архив с инвойсом (Excel, PDF или JPG/PNG). Я распознаю товары и подготовлю Excel-декларацию.")
 
 @dp.message_handler(content_types=types.ContentType.DOCUMENT)
 async def handle_zip(message: types.Message):
@@ -138,29 +172,10 @@ async def handle_zip(message: types.Message):
     for f in files:
         full_path = os.path.join(extract_dir, f)
         if f.endswith(".xlsx"):
-            df = pd.read_excel(full_path)
-            for _, row in df.iterrows():
-                name = str(row.get("Наименование", "")).lower()
-                weight = row.get("Вес", 0)
-                price = row.get("Цена", 0)
-                places = row.get("Места", 0)
-                tnved, trts, st1 = ("не найден", "Нет", "Нет")
-                for key in catalog:
-                    if key in name:
-                        tnved, trts, st1 = catalog[key]
-                        break
-                result_data.append({
-                    "Наименование товара": name,
-                    "Код ТН ВЭД": tnved,
-                    "Вес (кг)": weight,
-                    "Стоимость ($)": price,
-                    "Количество мест": places,
-                    "ТР ТС 021/2011": trts,
-                    "СТ-1": st1
-                })
+            result_data.extend(parse_excel_table(full_path))
         elif f.lower().endswith((".pdf", ".jpg", ".jpeg", ".png")):
             text = extract_text_from_file(full_path)
-            parsed = parse_lines(text)
+            parsed = parse_ocr_lines(text)
             result_data.extend(parsed)
 
     if not result_data:
@@ -168,7 +183,10 @@ async def handle_zip(message: types.Message):
         return
 
     user_sessions[uid] = result_data
-    preview = "\n".join([f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}" for x in result_data])
+    preview = "\n".join([
+        f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}"
+        for x in result_data
+    ])
     await message.answer(
         f"✅ Найдено {len(result_data)} позиций:\n{preview}\n\nНапиши 'готово' для генерации Excel."
     )
@@ -180,7 +198,7 @@ async def export_excel(message: types.Message):
     df = pd.DataFrame(items)
     out_path = f"/mnt/data/declaration_{uid}.xlsx"
     df.to_excel(out_path, index=False)
-    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Декларация сформирована.")
+    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Excel-декларация сформирована.")
     user_sessions.pop(uid)
 
 if __name__ == '__main__':
