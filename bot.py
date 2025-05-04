@@ -12,7 +12,6 @@ from pdf2image import convert_from_path
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 logging.basicConfig(level=logging.INFO)
-print("✅ BOT_TOKEN loaded:", bool(API_TOKEN))
 
 if not API_TOKEN:
     raise ValueError("❌ Переменная BOT_TOKEN не установлена! Проверь Render Secrets.")
@@ -21,13 +20,11 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 user_sessions = {}
 
-# Telegram menu
 async def on_startup(_):
     await bot.set_my_commands([
         types.BotCommand(command="/start", description="🔁 Перезапуск бота")
     ])
 
-# Справочник ТН ВЭД
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
     "огурцы": ("0707 00 190 0", "Нужна", "Да"),
@@ -106,46 +103,58 @@ def parse_ocr_lines(text):
             for key in catalog:
                 if key in line.lower():
                     tnved, trts, st1 = catalog[key]
-                    print(f"[Match] {key} | {weight} кг | ${price} | {places} мест")
+                    total = round(weight * price, 2)
                     data.append({
                         "Наименование товара": key,
                         "Код ТН ВЭД": tnved,
-                        "Вес (кг)": weight,
-                        "Стоимость ($)": price,
-                        "Количество мест": places,
-                        "ТР ТС 021/2011": trts,
+                        "Кол-во мест": places,
+                        "Вес нетто (кг)": weight,
+                        "Вес брутто (кг)": weight,
+                        "Цена за кг ($)": price,
+                        "Сумма ($)": total,
+                        "ТР ТС": trts,
                         "СТ-1": st1
                     })
                     break
     return data
 
-def parse_excel_table(path):
-    try:
-        df = pd.read_excel(path, skiprows=40)
-    except:
-        df = pd.read_excel(path)
-    print("[Excel columns]", df.columns.tolist())
+def parse_excel_file(filepath):
     data = []
+    try:
+        df = pd.read_excel(filepath, header=None)
+        print(f"[Excel] Загружено {len(df)} строк")
+    except Exception as e:
+        print(f"[Excel] Ошибка чтения: {e}")
+        return data
+
     for i, row in df.iterrows():
-        name = str(row.get("Unnamed: 1", "")).lower()
-        if not any(key in name for key in catalog):
-            continue
-        tnved = str(row.get("Unnamed: 2", "не найден"))
-        weight = float(row.get("Unnamed: 9", 0))
-        price = float(row.get("Unnamed: 10", 0))
-        amount = float(row.get("Unnamed: 11", 0))
-        places = int(row.get("Unnamed: 4", 0))
-        match = next((key for key in catalog if key in name), None)
-        if match:
-            code, trts, st1 = catalog[match]
-            tnved = code
+        row_str = ' '.join([str(cell).lower() for cell in row if pd.notnull(cell)])
+        if any(k in row_str for k in catalog):
+            print(f"[Excel строка] {row_str}")
+            name = next((k for k in catalog if k in row_str), "")
+            tnved, trts, st1 = catalog[name]
+            try:
+                weight = float([str(cell).replace(",", ".").replace("кг", "") for cell in row if "кг" in str(cell).lower()][0])
+            except:
+                weight = 0
+            try:
+                price = float([str(cell).replace(",", ".").replace("$", "") for cell in row if "$" in str(cell) or "usd" in str(cell).lower()][0])
+            except:
+                price = 0
+            try:
+                places = int([str(cell) for cell in row if str(cell).isdigit()][-1])
+            except:
+                places = 0
+            total = round(weight * price, 2)
             data.append({
-                "Наименование товара": match,
+                "Наименование товара": name,
                 "Код ТН ВЭД": tnved,
-                "Вес (кг)": weight,
-                "Стоимость ($)": amount,
-                "Количество мест": places,
-                "ТР ТС 021/2011": trts,
+                "Кол-во мест": places,
+                "Вес нетто (кг)": weight,
+                "Вес брутто (кг)": weight,
+                "Цена за кг ($)": price,
+                "Сумма ($)": total,
+                "ТР ТС": trts,
                 "СТ-1": st1
             })
     return data
@@ -153,7 +162,7 @@ def parse_excel_table(path):
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
     user_sessions[message.from_user.id] = []
-    await message.answer("📦 Отправь ZIP-архив с инвойсом (Excel, PDF или JPG/PNG). Я распознаю товары и подготовлю Excel-декларацию.")
+    await message.answer("📦 Отправь ZIP-архив с инвойсом (Excel, PDF или JPG/PNG). Я распознаю товары и подготовлю Excel-декларацию для Альта-ГТД.")
 
 @dp.message_handler(content_types=types.ContentType.DOCUMENT)
 async def handle_zip(message: types.Message):
@@ -172,7 +181,7 @@ async def handle_zip(message: types.Message):
     for f in files:
         full_path = os.path.join(extract_dir, f)
         if f.endswith(".xlsx"):
-            result_data.extend(parse_excel_table(full_path))
+            result_data.extend(parse_excel_file(full_path))
         elif f.lower().endswith((".pdf", ".jpg", ".jpeg", ".png")):
             text = extract_text_from_file(full_path)
             parsed = parse_ocr_lines(text)
@@ -184,8 +193,8 @@ async def handle_zip(message: types.Message):
 
     user_sessions[uid] = result_data
     preview = "\n".join([
-        f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}"
-        for x in result_data
+        f"{i+1}. {x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес нетто (кг)']} кг | ${x['Сумма ($)']}"
+        for i, x in enumerate(result_data)
     ])
     await message.answer(
         f"✅ Найдено {len(result_data)} позиций:\n{preview}\n\nНапиши 'готово' для генерации Excel."
@@ -195,10 +204,16 @@ async def handle_zip(message: types.Message):
 async def export_excel(message: types.Message):
     uid = message.from_user.id
     items = user_sessions.get(uid, [])
-    df = pd.DataFrame(items)
-    out_path = f"/mnt/data/declaration_{uid}.xlsx"
+    for i, item in enumerate(items):
+        item["№"] = i + 1
+    df = pd.DataFrame(items)[[
+        "№", "Наименование товара", "Код ТН ВЭД", "Кол-во мест",
+        "Вес нетто (кг)", "Вес брутто (кг)", "Цена за кг ($)",
+        "Сумма ($)", "ТР ТС", "СТ-1"
+    ]]
+    out_path = f"/mnt/data/declaration_altagt_{uid}.xlsx"
     df.to_excel(out_path, index=False)
-    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Excel-декларация сформирована.")
+    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Excel-декларация для Альта-ГТД.")
     user_sessions.pop(uid)
 
 if __name__ == '__main__':
