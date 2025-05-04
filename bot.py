@@ -5,23 +5,30 @@ import pytesseract
 import pandas as pd
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
+from aiogram.types import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.executor import start_polling
 from datetime import datetime
 from PIL import Image
 from pdf2image import convert_from_path
 
 API_TOKEN = os.getenv("BOT_TOKEN")
-print("✅ BOT_TOKEN loaded:", bool(API_TOKEN))  # Для отладки
+print("✅ BOT_TOKEN loaded:", bool(API_TOKEN))
 logging.basicConfig(level=logging.INFO)
 
 if not API_TOKEN:
-    raise ValueError("❌ Переменная BOT_TOKEN не установлена! Проверь секреты Fly.io.")
+    raise ValueError("❌ Переменная BOT_TOKEN не установлена! Проверь Render Secrets.")
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 user_sessions = {}
 
-# Расширенный справочник ТН ВЭД (35+ позиций)
+# Telegram menu button
+async def on_startup(_):
+    await bot.set_my_commands([
+        types.BotCommand(command="/start", description="🔁 Перезапустить бота")
+    ])
+
+# Каталог ТН ВЭД
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
     "огурцы": ("0707 00 190 0", "Нужна", "Да"),
@@ -65,11 +72,14 @@ def extract_text_from_file(file_path):
     if file_path.endswith('.pdf'):
         images = convert_from_path(file_path)
         for image in images:
-            text += pytesseract.image_to_string(image, lang='rus+eng') + "\n"
-
+            ocr = pytesseract.image_to_string(image, lang='rus+eng')
+            print(f"[OCR PDF page] {ocr}")
+            text += ocr + "\n"
     elif file_path.lower().endswith(('.jpg', '.jpeg', '.png')):
         image = Image.open(file_path)
-        text = pytesseract.image_to_string(image, lang='rus+eng')
+        ocr = pytesseract.image_to_string(image, lang='rus+eng')
+        print(f"[OCR Image] {ocr}")
+        text += ocr
     return text
 
 def parse_lines(text):
@@ -109,7 +119,7 @@ def parse_lines(text):
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
     user_sessions[message.from_user.id] = []
-    await message.answer("Привет! Отправь ZIP-архив с инвойсом (Excel, PDF или JPG)")
+    await message.answer("👋 Привет! Отправь ZIP-архив с инвойсом (Excel, PDF или JPG/PNG). Я распознаю содержимое и подготовлю Excel-декларацию.")
 
 @dp.message_handler(content_types=types.ContentType.DOCUMENT)
 async def handle_zip(message: types.Message):
@@ -159,20 +169,19 @@ async def handle_zip(message: types.Message):
 
     user_sessions[uid] = result_data
     preview = "\n".join([f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}" for x in result_data])
-await message.answer(f"""✅ Найдено {len(result_data)} позиций:
-{preview}
-
-Напиши 'готово' для генерации Excel.""")
+    await message.answer(
+        f"✅ Найдено {len(result_data)} позиций:\n{preview}\n\nНапиши 'готово' для генерации Excel."
+    )
 
 @dp.message_handler(lambda msg: msg.from_user.id in user_sessions and msg.text.lower() == "готово")
 async def export_excel(message: types.Message):
     uid = message.from_user.id
     items = user_sessions.get(uid, [])
     df = pd.DataFrame(items)
-    out_path = f"/mnt/data/declaration_v4_{uid}.xlsx"
+    out_path = f"/mnt/data/declaration_{uid}.xlsx"
     df.to_excel(out_path, index=False)
-    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Декларация в Excel.")
+    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Декларация сформирована.")
     user_sessions.pop(uid)
 
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+    start_polling(dp, skip_updates=True, on_startup=on_startup)
