@@ -67,7 +67,9 @@ def parse_ocr_lines(text):
     seen = set()
 
     for line in lines:
-        line = line.strip().lower()
+        line_raw = line.strip().lower()
+        line = line_raw.replace(" ", "")  # удаляем пробелы внутри чисел
+
         if not line or not any(k in line for k in catalog):
             continue
 
@@ -77,15 +79,15 @@ def parse_ocr_lines(text):
         seen.add(name)
 
         tnved, trts, st1 = catalog[name]
+        netto, brutto, price = 0, 0, 0
 
         # вес
-        netto = brutto = 0
         if "/" in line and "кг" in line:
             try:
                 weight_part = line.split("кг")[0]
                 netto, brutto = weight_part.split("/")
-                netto = float(netto.strip().replace(",", "."))
-                brutto = float(brutto.strip().replace(",", "."))
+                netto = float(netto.replace(",", "."))
+                brutto = float(brutto.replace(",", "."))
             except:
                 pass
         else:
@@ -96,20 +98,16 @@ def parse_ocr_lines(text):
                 pass
 
         # цена
-        price = 0
         for w in line.split():
-            try:
-                w_clean = w.replace("$", "").replace("usd", "").replace(",", ".")
-                if w_clean.replace(".", "").isdigit():
-                    price = float(w_clean)
-                    break
-            except:
-                continue
-
-        total = round(netto * price, 2)
+            w_clean = w.replace(" ", "").replace("$", "").replace("usd", "").replace(",", ".")
+            if w_clean.replace(".", "").isdigit():
+                price = float(w_clean)
+                break
 
         if netto == 0 and price == 0:
             continue
+
+        total = round(netto * price, 2)
 
         data.append({
             "Наименование товара": name,
@@ -140,55 +138,50 @@ def parse_excel_structured_table(filepath):
         return data
 
     df = df.iloc[header_index+1:]
-
     seen = set()
+
     for _, row in df.iterrows():
         cells = [str(c).strip().lower() if pd.notnull(c) else "" for c in row]
-        line = " ".join(cells)
+        line = " ".join(cells).replace(" ", "")  # удаляем пробелы внутри чисел
 
         if not any(k in line for k in catalog):
             continue
 
         name = next((k for k in catalog if k in line), None)
         if name in seen:
-            continue  # убираем повторы
+            continue
         seen.add(name)
 
         tnved, trts, st1 = catalog[name]
+        places, netto, brutto, price = 0, 0, 0, 0
 
-        # места
-        places = 0
-        try:
-            places = int([c for c in cells if c.isdigit()][-1])
-        except:
-            pass
-
-        # вес
-        netto = brutto = 0
+        # вес: нетто / брутто
         for c in cells:
             if "/" in c and "кг" in c:
                 try:
-                    netto, brutto = c.replace("кг", "").split("/")
-                    netto = float(netto.strip().replace(",", "."))
-                    brutto = float(brutto.strip().replace(",", "."))
+                    netto, brutto = c.replace("кг", "").replace(" ", "").split("/")
+                    netto = float(netto.replace(",", "."))
+                    brutto = float(brutto.replace(",", "."))
                     break
                 except:
                     continue
 
         # цена
-        price = 0
         for c in cells:
-            try:
-                if any(x in c for x in ["$", "usd"]) or c.replace(",", ".").replace(".", "").isdigit():
-                    price = float(c.replace("$", "").replace("usd", "").replace(",", "."))
-                    break
-            except:
-                continue
+            c_clean = c.replace(" ", "").replace("$", "").replace("usd", "").replace(",", ".")
+            if c_clean.replace(".", "").isdigit():
+                price = float(c_clean)
+                break
 
-        total = round(netto * price, 2)
+        # места
+        digits = [int(c) for c in cells if c.isdigit()]
+        if digits:
+            places = digits[-1]
 
         if netto == 0 and price == 0:
-            continue  # пропускаем пустые строки
+            continue
+
+        total = round(netto * price, 2)
 
         data.append({
             "Наименование товара": name,
