@@ -159,10 +159,10 @@ async def handle_zip(message: types.Message):
 
     user_sessions[uid] = result_data
     preview = "\n".join([f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес (кг)']} кг | ${x['Стоимость ($)']}" for x in result_data])
-    await message.answer(f"✅ Найдено {len(result_data)} позиций:
+await message.answer(f"""✅ Найдено {len(result_data)} позиций:
 {preview}
 
-Напиши 'готово' для генерации Excel.")
+Напиши 'готово' для генерации Excel.""")
 
 @dp.message_handler(lambda msg: msg.from_user.id in user_sessions and msg.text.lower() == "готово")
 async def export_excel(message: types.Message):
