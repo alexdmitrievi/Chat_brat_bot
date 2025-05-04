@@ -73,7 +73,7 @@ def extract_text_from_file(file_path):
     return text
 
 def parse_lines(text):
-lines = text.split("\n")
+    lines = text.split("\n")
     data = []
     for line in lines:
         if any(word in line.lower() for word in catalog.keys()):
