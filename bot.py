@@ -82,69 +82,83 @@ def parse_ocr_lines(text):
     lines = text.split("\n")
     data = []
     for line in lines:
-        line = line.strip()
+        line = line.strip().lower()
         if not line:
             continue
-        print(f"[Line] {line}")
-        if any(key in line.lower() for key in catalog):
-            parts = line.split()
+        if any(key in line for key in catalog):
+            print(f"[OCR строка] {line}")
+            name = next((k for k in catalog if k in line), None)
+            tnved, trts, st1 = catalog[name]
+
+            # Масса
             try:
-                weight = float([p for p in parts if "кг" in p.lower()][0].replace("кг", "").replace(",", "."))
+                weight = float([w.replace(",", ".").replace("кг", "") for w in line.split() if "кг" in w][0])
             except:
                 weight = 0
+
+            # Цена
             try:
-                price = float([p for p in parts if "$" in p or "usd" in p.lower()][0].replace("$", "").replace(",", "."))
+                price = float([p.replace(",", ".").replace("$", "") for p in line.split() if "$" in p or "usd" in p][0])
             except:
                 price = 0
+
+            # Кол-во мест
             try:
-                places = int([p for p in parts if p.isdigit()][-1])
+                digits = [int(p) for p in line.split() if p.isdigit()]
+                places = digits[-1] if digits else 0
             except:
                 places = 0
-            for key in catalog:
-                if key in line.lower():
-                    tnved, trts, st1 = catalog[key]
-                    total = round(weight * price, 2)
-                    data.append({
-                        "Наименование товара": key,
-                        "Код ТН ВЭД": tnved,
-                        "Кол-во мест": places,
-                        "Вес нетто (кг)": weight,
-                        "Вес брутто (кг)": weight,
-                        "Цена за кг ($)": price,
-                        "Сумма ($)": total,
-                        "ТР ТС": trts,
-                        "СТ-1": st1
-                    })
-                    break
+
+            total = round(weight * price, 2)
+            data.append({
+                "Наименование товара": name,
+                "Код ТН ВЭД": tnved,
+                "Кол-во мест": places,
+                "Вес нетто (кг)": weight,
+                "Вес брутто (кг)": weight,
+                "Цена за кг ($)": price,
+                "Сумма ($)": total,
+                "ТР ТС": trts,
+                "СТ-1": st1
+            })
     return data
 
 def parse_excel_file(filepath):
     data = []
     try:
         df = pd.read_excel(filepath, header=None)
-        print(f"[Excel] Загружено {len(df)} строк")
     except Exception as e:
         print(f"[Excel] Ошибка чтения: {e}")
         return data
 
     for i, row in df.iterrows():
-        row_str = ' '.join([str(cell).lower() for cell in row if pd.notnull(cell)])
-        if any(k in row_str for k in catalog):
-            print(f"[Excel строка] {row_str}")
-            name = next((k for k in catalog if k in row_str), "")
+        row_text = " ".join([str(cell).lower() for cell in row if pd.notnull(cell)])
+        if not row_text.strip():
+            continue
+        if any(key in row_text for key in catalog):
+            print(f"[Excel строка] {row_text}")
+            name = next((key for key in catalog if key in row_text), None)
             tnved, trts, st1 = catalog[name]
+
+            # Масса
             try:
-                weight = float([str(cell).replace(",", ".").replace("кг", "") for cell in row if "кг" in str(cell).lower()][0])
+                weight = float([w.replace(",", ".").replace("кг", "") for w in row_text.split() if "кг" in w][0])
             except:
                 weight = 0
+
+            # Цена
             try:
-                price = float([str(cell).replace(",", ".").replace("$", "") for cell in row if "$" in str(cell) or "usd" in str(cell).lower()][0])
+                price = float([p.replace(",", ".").replace("$", "") for p in row_text.split() if "$" in p or "usd" in p][0])
             except:
                 price = 0
+
+            # Кол-во мест
             try:
-                places = int([str(cell) for cell in row if str(cell).isdigit()][-1])
+                digits = [int(p) for p in row_text.split() if p.isdigit()]
+                places = digits[-1] if digits else 0
             except:
                 places = 0
+
             total = round(weight * price, 2)
             data.append({
                 "Наименование товара": name,
