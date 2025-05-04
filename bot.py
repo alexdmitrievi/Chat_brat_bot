@@ -81,28 +81,26 @@ def extract_text_from_file(file_path):
 def parse_ocr_lines(text):
     lines = text.split("\n")
     data = []
+
     for line in lines:
         line = line.strip().lower()
         if not line:
             continue
+
         if any(key in line for key in catalog):
-            print(f"[OCR строка] {line}")
             name = next((k for k in catalog if k in line), None)
             tnved, trts, st1 = catalog[name]
 
-            # Масса
             try:
                 weight = float([w.replace(",", ".").replace("кг", "") for w in line.split() if "кг" in w][0])
             except:
                 weight = 0
 
-            # Цена
             try:
                 price = float([p.replace(",", ".").replace("$", "") for p in line.split() if "$" in p or "usd" in p][0])
             except:
                 price = 0
 
-            # Кол-во мест
             try:
                 digits = [int(p) for p in line.split() if p.isdigit()]
                 places = digits[-1] if digits else 0
@@ -110,6 +108,7 @@ def parse_ocr_lines(text):
                 places = 0
 
             total = round(weight * price, 2)
+
             data.append({
                 "Наименование товара": name,
                 "Код ТН ВЭД": tnved,
@@ -121,56 +120,71 @@ def parse_ocr_lines(text):
                 "ТР ТС": trts,
                 "СТ-1": st1
             })
+
     return data
 
-def parse_excel_file(filepath):
+def parse_excel_structured_table(filepath):
+    df = pd.read_excel(filepath, header=None)
     data = []
-    try:
-        df = pd.read_excel(filepath, header=None)
-    except Exception as e:
-        print(f"[Excel] Ошибка чтения: {e}")
-        return data
-
+    
+    # Найдём начало таблицы по ключевым словам
+    header_index = None
     for i, row in df.iterrows():
         row_text = " ".join([str(cell).lower() for cell in row if pd.notnull(cell)])
-        if not row_text.strip():
+        if "наименование" in row_text and "вес" in row_text:
+            header_index = i
+            break
+
+    if header_index is None:
+        return data  # не нашли таблицу
+
+    df = df.iloc[header_index+1:]  # пропускаем строку с заголовками
+
+    for _, row in df.iterrows():
+        cells = [str(c).strip().lower() if pd.notnull(c) else "" for c in row]
+        line = " ".join(cells)
+
+        if not any(k in line for k in catalog):
             continue
-        if any(key in row_text for key in catalog):
-            print(f"[Excel строка] {row_text}")
-            name = next((key for key in catalog if key in row_text), None)
-            tnved, trts, st1 = catalog[name]
 
-            # Масса
-            try:
-                weight = float([w.replace(",", ".").replace("кг", "") for w in row_text.split() if "кг" in w][0])
-            except:
-                weight = 0
+        name = next((k for k in catalog if k in line), None)
+        tnved, trts, st1 = catalog[name]
 
-            # Цена
-            try:
-                price = float([p.replace(",", ".").replace("$", "") for p in row_text.split() if "$" in p or "usd" in p][0])
-            except:
-                price = 0
+        # Кол-во мест
+        try:
+            places = int([c for c in cells if c.isdigit()][0])
+        except:
+            places = 0
 
-            # Кол-во мест
-            try:
-                digits = [int(p) for p in row_text.split() if p.isdigit()]
-                places = digits[-1] if digits else 0
-            except:
-                places = 0
+        # Вес нетто и брутто (ищем в одной ячейке)
+        try:
+            weight_cell = next(c for c in cells if "кг" in c and "/" in c)
+            netto, brutto = weight_cell.replace("кг", "").split("/")
+            netto = float(netto.strip())
+            brutto = float(brutto.strip())
+        except:
+            netto = brutto = 0
 
-            total = round(weight * price, 2)
-            data.append({
-                "Наименование товара": name,
-                "Код ТН ВЭД": tnved,
-                "Кол-во мест": places,
-                "Вес нетто (кг)": weight,
-                "Вес брутто (кг)": weight,
-                "Цена за кг ($)": price,
-                "Сумма ($)": total,
-                "ТР ТС": trts,
-                "СТ-1": st1
-            })
+        # Цена
+        try:
+            price = float(next(c.replace("$", "").replace(",", ".") for c in cells if "$" in c or "usd" in c))
+        except:
+            price = 0
+
+        total = round(netto * price, 2)
+
+        data.append({
+            "Наименование товара": name,
+            "Код ТН ВЭД": tnved,
+            "Кол-во мест": places,
+            "Вес нетто (кг)": netto,
+            "Вес брутто (кг)": brutto,
+            "Цена за кг ($)": price,
+            "Сумма ($)": total,
+            "ТР ТС": trts,
+            "СТ-1": st1
+        })
+
     return data
 
 @dp.message_handler(commands=['start'])
