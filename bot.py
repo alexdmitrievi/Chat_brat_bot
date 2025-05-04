@@ -5,26 +5,24 @@ import pytesseract
 import pandas as pd
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils.executor import start_polling
-from datetime import datetime
+from aiogram.types import BotCommand
+from aiogram.utils import executor
 from PIL import Image
 from pdf2image import convert_from_path
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 logging.basicConfig(level=logging.INFO)
-
-if not API_TOKEN:
-    raise ValueError("❌ Переменная BOT_TOKEN не установлена! Проверь Render Secrets.")
-
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 user_sessions = {}
 
-async def on_startup(_):
+# Меню Telegram
+async def set_menu():
     await bot.set_my_commands([
-        types.BotCommand(command="/start", description="🔁 Перезапуск бота")
+        BotCommand("start", "Перезапустить бота"),
     ])
 
+# Справочник ТН ВЭД
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
     "огурцы": ("0707 00 190 0", "Нужна", "Да"),
@@ -63,52 +61,30 @@ catalog = {
     "дыни": ("0807 19 000 0", "Нужна", "Да")
 }
 
-def extract_text_from_file(file_path):
-    text = ""
-    if file_path.endswith('.pdf'):
-        images = convert_from_path(file_path)
-        for i, image in enumerate(images):
-            ocr = pytesseract.image_to_string(image, lang='rus+eng')
-            print(f"\n[OCR PDF page {i+1}]\n{ocr}")
-            text += ocr + "\n"
-    elif file_path.lower().endswith(('.jpg', '.jpeg', '.png')):
-        image = Image.open(file_path)
-        ocr = pytesseract.image_to_string(image, lang='rus+eng')
-        print(f"\n[OCR Image]\n{ocr}")
-        text += ocr
-    return text
-
 def parse_ocr_lines(text):
     lines = text.split("\n")
     data = []
-
     for line in lines:
         line = line.strip().lower()
         if not line:
             continue
-
         if any(key in line for key in catalog):
             name = next((k for k in catalog if k in line), None)
             tnved, trts, st1 = catalog[name]
-
             try:
                 weight = float([w.replace(",", ".").replace("кг", "") for w in line.split() if "кг" in w][0])
             except:
                 weight = 0
-
             try:
                 price = float([p.replace(",", ".").replace("$", "") for p in line.split() if "$" in p or "usd" in p][0])
             except:
                 price = 0
-
             try:
                 digits = [int(p) for p in line.split() if p.isdigit()]
                 places = digits[-1] if digits else 0
             except:
                 places = 0
-
             total = round(weight * price, 2)
-
             data.append({
                 "Наименование товара": name,
                 "Код ТН ВЭД": tnved,
@@ -120,43 +96,31 @@ def parse_ocr_lines(text):
                 "ТР ТС": trts,
                 "СТ-1": st1
             })
-
     return data
 
 def parse_excel_structured_table(filepath):
     df = pd.read_excel(filepath, header=None)
     data = []
-    
-    # Найдём начало таблицы по ключевым словам
     header_index = None
     for i, row in df.iterrows():
         row_text = " ".join([str(cell).lower() for cell in row if pd.notnull(cell)])
         if "наименование" in row_text and "вес" in row_text:
             header_index = i
             break
-
     if header_index is None:
-        return data  # не нашли таблицу
-
-    df = df.iloc[header_index+1:]  # пропускаем строку с заголовками
-
+        return data
+    df = df.iloc[header_index+1:]
     for _, row in df.iterrows():
         cells = [str(c).strip().lower() if pd.notnull(c) else "" for c in row]
         line = " ".join(cells)
-
         if not any(k in line for k in catalog):
             continue
-
         name = next((k for k in catalog if k in line), None)
         tnved, trts, st1 = catalog[name]
-
-        # Кол-во мест
         try:
             places = int([c for c in cells if c.isdigit()][0])
         except:
             places = 0
-
-        # Вес нетто и брутто (ищем в одной ячейке)
         try:
             weight_cell = next(c for c in cells if "кг" in c and "/" in c)
             netto, brutto = weight_cell.replace("кг", "").split("/")
@@ -164,15 +128,11 @@ def parse_excel_structured_table(filepath):
             brutto = float(brutto.strip())
         except:
             netto = brutto = 0
-
-        # Цена
         try:
             price = float(next(c.replace("$", "").replace(",", ".") for c in cells if "$" in c or "usd" in c))
         except:
             price = 0
-
         total = round(netto * price, 2)
-
         data.append({
             "Наименование товара": name,
             "Код ТН ВЭД": tnved,
@@ -184,13 +144,24 @@ def parse_excel_structured_table(filepath):
             "ТР ТС": trts,
             "СТ-1": st1
         })
-
     return data
+
+def extract_text_from_file(file_path):
+    text = ""
+    if file_path.endswith(".pdf"):
+        images = convert_from_path(file_path)
+        for image in images:
+            text += pytesseract.image_to_string(image, lang='rus+eng') + "\n"
+    elif file_path.lower().endswith((".jpg", ".jpeg", ".png")):
+        image = Image.open(file_path)
+        text = pytesseract.image_to_string(image, lang='rus+eng')
+    return text
 
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
+    await set_menu()
     user_sessions[message.from_user.id] = []
-    await message.answer("📦 Отправь ZIP-архив с инвойсом (Excel, PDF или JPG/PNG). Я распознаю товары и подготовлю Excel-декларацию для Альта-ГТД.")
+    await message.answer("Привет! Отправь ZIP-архив с инвойсом (Excel, PDF или JPG/PNG)")
 
 @dp.message_handler(content_types=types.ContentType.DOCUMENT)
 async def handle_zip(message: types.Message):
@@ -199,50 +170,40 @@ async def handle_zip(message: types.Message):
     await message.document.download(destination_file=file_path)
     extract_dir = f"/mnt/data/extracted_{uid}"
     os.makedirs(extract_dir, exist_ok=True)
-
     with zipfile.ZipFile(file_path, 'r') as zip_ref:
         zip_ref.extractall(extract_dir)
-
     files = os.listdir(extract_dir)
     result_data = []
-
     for f in files:
         full_path = os.path.join(extract_dir, f)
         if f.endswith(".xlsx"):
-            result_data.extend(parse_excel_file(full_path))
+            parsed = parse_excel_structured_table(full_path)
+            result_data.extend(parsed)
         elif f.lower().endswith((".pdf", ".jpg", ".jpeg", ".png")):
             text = extract_text_from_file(full_path)
             parsed = parse_ocr_lines(text)
             result_data.extend(parsed)
-
     if not result_data:
         await message.answer("❌ Не удалось распознать ни одного товара.")
         return
-
     user_sessions[uid] = result_data
     preview = "\n".join([
-        f"{i+1}. {x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес нетто (кг)']} кг | ${x['Сумма ($)']}"
-        for i, x in enumerate(result_data)
+        f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес нетто (кг)']} кг | ${x['Сумма ($)']}" 
+        for x in result_data
     ])
-    await message.answer(
-        f"✅ Найдено {len(result_data)} позиций:\n{preview}\n\nНапиши 'готово' для генерации Excel."
-    )
+    await message.answer(f"✅ Найдено {len(result_data)} позиций:\n\n{preview}\n\nНапиши 'готово' для генерации Excel.")
 
 @dp.message_handler(lambda msg: msg.from_user.id in user_sessions and msg.text.lower() == "готово")
 async def export_excel(message: types.Message):
     uid = message.from_user.id
     items = user_sessions.get(uid, [])
-    for i, item in enumerate(items):
-        item["№"] = i + 1
-    df = pd.DataFrame(items)[[
-        "№", "Наименование товара", "Код ТН ВЭД", "Кол-во мест",
-        "Вес нетто (кг)", "Вес брутто (кг)", "Цена за кг ($)",
-        "Сумма ($)", "ТР ТС", "СТ-1"
-    ]]
-    out_path = f"/mnt/data/declaration_altagt_{uid}.xlsx"
+    df = pd.DataFrame(items)
+    out_path = f"/mnt/data/declaration_{uid}.xlsx"
     df.to_excel(out_path, index=False)
-    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Excel-декларация для Альта-ГТД.")
+    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Декларация в Excel.")
     user_sessions.pop(uid)
 
 if __name__ == '__main__':
-    start_polling(dp, skip_updates=True, on_startup=on_startup)
+    loop = asyncio.get_event_loop()
+    loop.create_task(set_menu())
+    executor.start_polling(dp, skip_updates=True)
