@@ -9,13 +9,13 @@ from aiogram.utils import executor
 from datetime import datetime
 from PIL import Image
 from pdf2image import convert_from_path
-from dotenv import load_dotenv
-load_dotenv()
 
-
-API_TOKEN = os.getenv("BOT_TOKEN")
-print("✅ BOT_TOKEN loaded:", bool(API_TOKEN))  # <--- ЭТА СТРОКА
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
+
+# Чтение токена из переменной окружения
+API_TOKEN = os.getenv("BOT_TOKEN")
+print("✅ BOT_TOKEN loaded:", bool(API_TOKEN), "| Value:", API_TOKEN)
 
 if not API_TOKEN:
     raise ValueError("❌ Переменная BOT_TOKEN не установлена! Проверь секреты Fly.io.")
@@ -24,7 +24,7 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 user_sessions = {}
 
-# Расширенный справочник ТН ВЭД (35+ позиций)
+# Расширенный справочник ТН ВЭД
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
     "огурцы": ("0707 00 190 0", "Нужна", "Да"),
