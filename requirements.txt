@@ -1,0 +1,6 @@
+aiogram==2.25.1
+pandas
+openpyxl
+pytesseract
+pdf2image
+Pillow
