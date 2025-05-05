@@ -1,6 +1,5 @@
 import logging
 import os
-import zipfile
 import pytesseract
 import pandas as pd
 import asyncio
@@ -17,13 +16,11 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 user_sessions = {}
 
-# Меню Telegram
 async def set_menu():
     await bot.set_my_commands([
         BotCommand("start", "Перезапустить бота"),
     ])
 
-# Справочник ТН ВЭД
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
     "огурцы": ("0707 00 190 0", "Нужна", "Да"),
@@ -68,13 +65,11 @@ def extract_numbers_with_context(line):
     netto = price = 0
     weight_keywords = ['кг', 'вес', 'нетто']
     price_keywords = ['$', 'usd', 'цена', 'за', 'кг']
-
     words = line.lower().split()
     for i, word in enumerate(words):
         cleaned_raw = word.replace(" ", "")
         if cleaned_raw.isdigit() and cleaned_raw in tnved_codes:
             continue
-
         cleaned = word.replace(",", ".").replace(" ", "")
         match = re.match(r"(\d+(\.\d+)?)", cleaned)
         if match:
@@ -92,23 +87,19 @@ def parse_ocr_lines(text):
     lines = text.split("\n")
     data = []
     seen = set()
-
     for line in lines:
         raw = line.strip().lower()
         if not any(k in raw for k in catalog):
             continue
-
         name = next((k for k in catalog if k in raw), None)
         if not name or name in seen:
             continue
         seen.add(name)
-
         tnved, trts, st1 = catalog[name]
         netto, price = extract_numbers_with_context(line)
         if netto <= 0 or price <= 0:
             continue
         total = round(netto * price, 2)
-
         data.append({
             "Наименование товара": name,
             "Код ТН ВЭД": tnved,
@@ -120,14 +111,12 @@ def parse_ocr_lines(text):
             "ТР ТС": trts,
             "СТ-1": st1
         })
-
     return data
 
 def parse_excel_structured_table(filepath):
     df = pd.read_excel(filepath, header=None)
     data = []
     seen = set()
-
     for _, row in df.iterrows():
         row_values = [str(cell).strip().lower() for cell in row if pd.notnull(cell)]
         line = " ".join(row_values)
@@ -137,13 +126,11 @@ def parse_excel_structured_table(filepath):
         if not name or name in seen:
             continue
         seen.add(name)
-
         tnved, trts, st1 = catalog[name]
         netto, price = extract_numbers_with_context(line)
         if netto <= 0 or price <= 0:
             continue
         total = round(netto * price, 2)
-
         data.append({
             "Наименование товара": name,
             "Код ТН ВЭД": tnved,
@@ -155,7 +142,6 @@ def parse_excel_structured_table(filepath):
             "ТР ТС": trts,
             "СТ-1": st1
         })
-
     return data
 
 def extract_text_from_file(file_path):
@@ -171,8 +157,7 @@ def extract_text_from_file(file_path):
     elif file_path.lower().endswith((".jpg", ".jpeg", ".png")):
         try:
             image = Image.open(file_path)
-            ocr = pytesseract.image_to_string(image, lang="rus+eng")
-            text = ocr
+            text = pytesseract.image_to_string(image, lang="rus+eng")
         except Exception as e:
             print(f"[OCR IMAGE ERROR] {e}")
     return text
@@ -181,31 +166,25 @@ def extract_text_from_file(file_path):
 async def start(message: types.Message):
     await set_menu()
     user_sessions[message.from_user.id] = []
-    await message.answer("Привет! Отправь ZIP-архив с инвойсом (Excel, PDF или JPG/PNG)")
+    await message.answer("Привет! Отправь один файл с инвойсом (Excel, PDF или изображение JPG/PNG)")
 
 @dp.message_handler(content_types=types.ContentType.DOCUMENT)
-async def handle_zip(message: types.Message):
+async def handle_file(message: types.Message):
     uid = message.from_user.id
     file_path = f"/mnt/data/{message.document.file_name}"
     await message.document.download(destination_file=file_path)
-    extract_dir = f"/mnt/data/extracted_{uid}"
-    os.makedirs(extract_dir, exist_ok=True)
-    with zipfile.ZipFile(file_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_dir)
-    files = os.listdir(extract_dir)
     result_data = []
-    for f in files:
-        full_path = os.path.join(extract_dir, f)
-        if f.endswith(".xlsx"):
-            parsed = parse_excel_structured_table(full_path)
-            result_data.extend(parsed)
-        elif f.lower().endswith((".pdf", ".jpg", ".jpeg", ".png")):
-            text = extract_text_from_file(full_path)
-            parsed = parse_ocr_lines(text)
-            result_data.extend(parsed)
+
+    if file_path.lower().endswith(".xlsx"):
+        result_data = parse_excel_structured_table(file_path)
+    elif file_path.lower().endswith((".pdf", ".jpg", ".jpeg", ".png")):
+        text = extract_text_from_file(file_path)
+        result_data = parse_ocr_lines(text)
+
     if not result_data:
         await message.answer("❌ Не удалось распознать ни одного товара.")
         return
+
     user_sessions[uid] = result_data
     preview = "\n".join([
         f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес нетто (кг)']} кг | ${x['Сумма ($)']}"
@@ -227,3 +206,4 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.create_task(set_menu())
     executor.start_polling(dp, skip_updates=True)
+
