@@ -1,25 +1,15 @@
-import logging
 import os
-import pytesseract
-import pandas as pd
+import logging
 import asyncio
-import re
+import pandas as pd
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BotCommand
 from aiogram.utils import executor
-from PIL import Image
-from pdf2image import convert_from_path
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
-user_sessions = {}
-
-async def set_menu():
-    await bot.set_my_commands([
-        BotCommand("start", "Перезапустить бота"),
-    ])
 
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
@@ -27,183 +17,135 @@ catalog = {
     "картофель": ("0701 90 500 0", "Нужна", "Да"),
     "лук": ("0703 10 190 0", "Нужна", "Да"),
     "чеснок": ("0703 20 000 0", "Нужна", "Да"),
-    "капуста": ("0704 90 100 0", "Нужна", "Да"),
-    "брокколи": ("0704 10 000 0", "Нужна", "Да"),
-    "морковь": ("0706 10 000 0", "Нужна", "Да"),
-    "свекла": ("0706 20 000 0", "Нужна", "Да"),
-    "редис": ("0706 90 900 2", "Нужна", "Да"),
-    "петрушка": ("0706 90 900 1", "Нужна", "Да"),
-    "укроп": ("0706 90 900 3", "Нужна", "Да"),
-    "шпинат": ("0710 30 000 0", "Нужна", "Да"),
-    "кабачки": ("0709 90 900 1", "Нужна", "Да"),
-    "баклажаны": ("0709 30 000 0", "Нужна", "Да"),
-    "перец": ("0709 60 100 0", "Нужна", "Да"),
     "яблоки": ("0808 10 800 0", "Нужна", "Да"),
-    "груши": ("0808 30 900 0", "Нужна", "Да"),
     "абрикосы": ("0809 10 000 0", "Нужна", "Да"),
-    "черешня": ("0809 29 000 0", "Нужна", "Да"),
-    "персики": ("0809 30 000 0", "Нужна", "Да"),
-    "сливы": ("0809 40 000 0", "Нужна", "Да"),
-    "нектарины": ("0809 30 100 0", "Нужна", "Да"),
-    "гранаты": ("0810 90 500 0", "Нужна", "Да"),
-    "хурма": ("0810 70 000 0", "Нужна", "Да"),
-    "виноград": ("0806 10 100 0", "Нужна", "Да"),
     "мандарины": ("0805 20 100 0", "Нужна", "Да"),
-    "апельсины": ("0805 10 200 0", "Нужна", "Да"),
     "лимоны": ("0805 50 100 0", "Нужна", "Да"),
-    "бананы": ("0803 90 100 0", "Нужна", "Нет"),
-    "киви": ("0810 50 000 0", "Нужна", "Нет"),
-    "финики": ("0804 10 000 0", "Нужна", "Нет"),
-    "инжир": ("0804 20 100 0", "Нужна", "Нет"),
-    "арбузы": ("0807 11 000 0", "Нужна", "Да"),
-    "дыни": ("0807 19 000 0", "Нужна", "Да")
+    "арбуз": ("0807 11 000 0", "Нужна", "Да")
 }
 
-tnved_codes = set(code.replace(" ", "") for code, _, _ in catalog.values())
+user_states = {}
 
-def extract_numbers_with_context(line):
-    netto = price = 0
-    weight_keywords = ['кг', 'вес', 'нетто']
-    price_keywords = ['$', 'usd', 'цена', 'за', 'кг']
-    words = line.lower().split()
-    for i, word in enumerate(words):
-        cleaned_raw = word.replace(" ", "")
-        if cleaned_raw.isdigit() and cleaned_raw in tnved_codes:
-            continue
-        cleaned = word.replace(",", ".").replace(" ", "")
-        match = re.match(r"(\d+(\.\d+)?)", cleaned)
-        if match:
-            value = float(match.group(1))
-            context = " ".join(words[max(0, i-2):i+3])
-            if any(k in word for k in weight_keywords) or any(k in context for k in weight_keywords):
-                if 0 < value < 100000:
-                    netto = value
-            elif any(k in word for k in price_keywords) or any(k in context for k in price_keywords):
-                if 0 < value < 1000:
-                    price = value
-    return netto, price
-
-def parse_ocr_lines(text):
-    lines = text.split("\n")
-    data = []
-    seen = set()
-    for line in lines:
-        raw = line.strip().lower()
-        if not any(k in raw for k in catalog):
-            continue
-        name = next((k for k in catalog if k in raw), None)
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        tnved, trts, st1 = catalog[name]
-        netto, price = extract_numbers_with_context(line)
-        if netto <= 0 or price <= 0:
-            continue
-        total = round(netto * price, 2)
-        data.append({
-            "Наименование товара": name,
-            "Код ТН ВЭД": tnved,
-            "Кол-во мест": 0,
-            "Вес нетто (кг)": netto,
-            "Вес брутто (кг)": netto,
-            "Цена за кг ($)": price,
-            "Сумма ($)": total,
-            "ТР ТС": trts,
-            "СТ-1": st1
-        })
-    return data
-
-def parse_excel_structured_table(filepath):
-    df = pd.read_excel(filepath, header=None)
-    data = []
-    seen = set()
-    for _, row in df.iterrows():
-        row_values = [str(cell).strip().lower() for cell in row if pd.notnull(cell)]
-        line = " ".join(row_values)
-        if not any(k in line for k in catalog):
-            continue
-        name = next((k for k in catalog if k in line), None)
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        tnved, trts, st1 = catalog[name]
-        netto, price = extract_numbers_with_context(line)
-        if netto <= 0 or price <= 0:
-            continue
-        total = round(netto * price, 2)
-        data.append({
-            "Наименование товара": name,
-            "Код ТН ВЭД": tnved,
-            "Кол-во мест": 0,
-            "Вес нетто (кг)": netto,
-            "Вес брутто (кг)": netto,
-            "Цена за кг ($)": price,
-            "Сумма ($)": total,
-            "ТР ТС": trts,
-            "СТ-1": st1
-        })
-    return data
-
-def extract_text_from_file(file_path):
-    text = ""
-    if file_path.lower().endswith(".pdf"):
-        try:
-            images = convert_from_path(file_path)
-            for image in images:
-                ocr = pytesseract.image_to_string(image, lang="rus+eng")
-                text += ocr + "\n"
-        except Exception as e:
-            print(f"[OCR PDF ERROR] {e}")
-    elif file_path.lower().endswith((".jpg", ".jpeg", ".png")):
-        try:
-            image = Image.open(file_path)
-            text = pytesseract.image_to_string(image, lang="rus+eng")
-        except Exception as e:
-            print(f"[OCR IMAGE ERROR] {e}")
-    return text
+async def set_menu():
+    await bot.set_my_commands([
+        BotCommand("start", "Перезапустить бота"),
+    ])
 
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
+    user_states[message.from_user.id] = {
+        "step": "product",
+        "current": {},
+        "positions": [],
+        "invoice_number": "",
+        "invoice_date": "",
+        "cmr_number": "",
+        "cmr_date": ""
+    }
     await set_menu()
-    user_sessions[message.from_user.id] = []
-    await message.answer("Привет! Отправь один файл с инвойсом (Excel, PDF или изображение JPG/PNG)")
+    await message.answer("Привет! Давай соберём декларацию. Напиши наименование товара (например, 'томаты'):")
 
-@dp.message_handler(content_types=types.ContentType.DOCUMENT)
-async def handle_file(message: types.Message):
-    uid = message.from_user.id
-    file_path = f"/mnt/data/{message.document.file_name}"
-    await message.document.download(destination_file=file_path)
-    result_data = []
+@dp.message_handler(lambda msg: msg.from_user.id in user_states)
+async def handle_input(message: types.Message):
+    state = user_states[message.from_user.id]
+    step = state["step"]
+    text = message.text.strip().lower()
 
-    if file_path.lower().endswith(".xlsx"):
-        result_data = parse_excel_structured_table(file_path)
-    elif file_path.lower().endswith((".pdf", ".jpg", ".jpeg", ".png")):
-        text = extract_text_from_file(file_path)
-        result_data = parse_ocr_lines(text)
+    if step == "product":
+        if text not in catalog:
+            await message.answer("❌ Товар не найден в справочнике. Попробуй ещё раз.")
+            return
+        tnved, trts, st1 = catalog[text]
+        state["current"] = {
+            "Наименование товара": text,
+            "Код ТН ВЭД": tnved,
+            "ТР ТС": trts,
+            "СТ-1": st1,
+            "Страна происхождения": "Узбекистан",
+            "Страна отправления": "Узбекистан",
+            "Преференция": "Да",
+            "Ставка НДС (%)": 10
+        }
+        state["step"] = "netto"
+        await message.answer("Введи вес нетто (в кг):")
 
-    if not result_data:
-        await message.answer("❌ Не удалось распознать ни одного товара.")
-        return
+    elif step == "netto":
+        try:
+            state["current"]["Вес нетто (кг)"] = float(text.replace(",", "."))
+            state["step"] = "brutto"
+            await message.answer("Введи вес брутто (в кг):")
+        except:
+            await message.answer("❌ Введи число, например: 350.5")
 
-    user_sessions[uid] = result_data
-    preview = "\n".join([
-        f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес нетто (кг)']} кг | ${x['Сумма ($)']}"
-        for x in result_data
-    ])
-    await message.answer(f"✅ Найдено {len(result_data)} позиций:\n\n{preview}\n\nНапиши 'готово' для генерации Excel.")
+    elif step == "brutto":
+        try:
+            state["current"]["Вес брутто (кг)"] = float(text.replace(",", "."))
+            state["step"] = "places"
+            await message.answer("Введи количество мест:")
+        except:
+            await message.answer("❌ Введи число, например: 360")
 
-@dp.message_handler(lambda msg: msg.from_user.id in user_sessions and msg.text.lower() == "готово")
-async def export_excel(message: types.Message):
-    uid = message.from_user.id
-    items = user_sessions.get(uid, [])
-    df = pd.DataFrame(items)
-    out_path = f"/mnt/data/declaration_{uid}.xlsx"
-    df.to_excel(out_path, index=False)
-    await message.answer_document(types.InputFile(out_path), caption="✅ Готово! Декларация в Excel.")
-    user_sessions.pop(uid)
+    elif step == "places":
+        try:
+            state["current"]["Кол-во мест"] = int(text)
+            state["step"] = "price"
+            await message.answer("Введи цену за кг в долларах (например: 0.85):")
+        except:
+            await message.answer("❌ Введи целое число, например: 20")
+
+    elif step == "price":
+        try:
+            price = float(text.replace(",", "."))
+            current = state["current"]
+            current["Цена за кг ($)"] = price
+            current["Сумма ($)"] = round(current["Вес нетто (кг)"] * price, 2)
+            state["positions"].append(current)
+            state["current"] = {}
+            state["step"] = "add_more"
+            await message.answer("✅ Позиция добавлена. Добавить ещё товар? (да/нет)")
+        except:
+            await message.answer("❌ Введи корректную цену, например: 1.25")
+
+    elif step == "add_more":
+        if text in ["да", "yes", "д"]:
+            state["step"] = "product"
+            await message.answer("Напиши наименование следующего товара:")
+        elif text in ["нет", "no", "н"]:
+            state["step"] = "invoice_number"
+            await message.answer("Введи номер инвойса:")
+        else:
+            await message.answer("Пожалуйста, ответь 'да' или 'нет'.")
+
+    elif step == "invoice_number":
+        state["invoice_number"] = text
+        state["step"] = "invoice_date"
+        await message.answer("Введи дату инвойса (например: 01.05.2025):")
+
+    elif step == "invoice_date":
+        state["invoice_date"] = text
+        state["step"] = "cmr_number"
+        await message.answer("Введи номер CMR:")
+
+    elif step == "cmr_number":
+        state["cmr_number"] = text
+        state["step"] = "cmr_date"
+        await message.answer("Введи дату CMR (например: 02.05.2025):")
+
+    elif step == "cmr_date":
+        state["cmr_date"] = text
+        df = pd.DataFrame(state["positions"])
+        df["Номер инвойса"] = state["invoice_number"]
+        df["Дата инвойса"] = state["invoice_date"]
+        df["Номер CMR"] = state["cmr_number"]
+        df["Дата CMR"] = state["cmr_date"]
+        file_path = f"/mnt/data/declaration_{message.from_user.id}.xlsx"
+        df.to_excel(file_path, index=False)
+        await message.answer_document(types.InputFile(file_path), caption="📄 Декларация готова!")
+        del user_states[message.from_user.id]
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.create_task(set_menu())
     executor.start_polling(dp, skip_updates=True)
+
 

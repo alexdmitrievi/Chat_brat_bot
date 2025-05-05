@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: gtd-bot
+    runtime: python
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot_v3.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
