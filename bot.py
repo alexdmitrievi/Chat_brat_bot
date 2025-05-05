@@ -4,6 +4,7 @@ import zipfile
 import pytesseract
 import pandas as pd
 import asyncio
+import re
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BotCommand
 from aiogram.utils import executor
@@ -61,13 +62,39 @@ catalog = {
     "дыни": ("0807 19 000 0", "Нужна", "Да")
 }
 
+tnved_codes = set(code.replace(" ", "") for code, _, _ in catalog.values())
+
+def extract_numbers_with_context(line):
+    netto = price = 0
+    weight_keywords = ['кг', 'вес', 'нетто']
+    price_keywords = ['$', 'usd', 'цена', 'за', 'кг']
+
+    words = line.lower().split()
+    for i, word in enumerate(words):
+        cleaned_raw = word.replace(" ", "")
+        if cleaned_raw.isdigit() and cleaned_raw in tnved_codes:
+            continue
+
+        cleaned = word.replace(",", ".").replace(" ", "")
+        match = re.match(r"(\d+(\.\d+)?)", cleaned)
+        if match:
+            value = float(match.group(1))
+            context = " ".join(words[max(0, i-2):i+3])
+            if any(k in word for k in weight_keywords) or any(k in context for k in weight_keywords):
+                if 0 < value < 100000:
+                    netto = value
+            elif any(k in word for k in price_keywords) or any(k in context for k in price_keywords):
+                if 0 < value < 1000:
+                    price = value
+    return netto, price
+
 def parse_ocr_lines(text):
     lines = text.split("\n")
     data = []
     seen = set()
 
     for line in lines:
-        raw = line.strip().lower().replace(" ", "")
+        raw = line.strip().lower()
         if not any(k in raw for k in catalog):
             continue
 
@@ -77,24 +104,9 @@ def parse_ocr_lines(text):
         seen.add(name)
 
         tnved, trts, st1 = catalog[name]
-
-        numbers = []
-        for w in line.split():
-            cleaned = w.replace("кг", "").replace("usd", "").replace("$", "").replace(",", ".").replace(" ", "")
-            try:
-                num = float(cleaned)
-                numbers.append(num)
-            except:
-                continue
-
-        numbers = sorted(numbers, reverse=True)
-        netto = numbers[0] if len(numbers) > 0 else 0
-        price = numbers[1] if len(numbers) > 1 else 0
-
-        # 🔒 Ограничения
-        if netto <= 0 or price <= 0 or netto > 100000 or price > 1000:
+        netto, price = extract_numbers_with_context(line)
+        if netto <= 0 or price <= 0:
             continue
-
         total = round(netto * price, 2)
 
         data.append({
@@ -118,8 +130,7 @@ def parse_excel_structured_table(filepath):
 
     for _, row in df.iterrows():
         row_values = [str(cell).strip().lower() for cell in row if pd.notnull(cell)]
-        line = " ".join(row_values).replace(" ", "")
-
+        line = " ".join(row_values)
         if not any(k in line for k in catalog):
             continue
         name = next((k for k in catalog if k in line), None)
@@ -128,24 +139,9 @@ def parse_excel_structured_table(filepath):
         seen.add(name)
 
         tnved, trts, st1 = catalog[name]
-
-        numbers = []
-        for word in row_values:
-            cleaned = word.replace("кг", "").replace("usd", "").replace("$", "").replace(",", ".").replace(" ", "")
-            try:
-                num = float(cleaned)
-                numbers.append(num)
-            except:
-                continue
-
-        numbers = sorted(numbers, reverse=True)
-        netto = numbers[0] if len(numbers) > 0 else 0
-        price = numbers[1] if len(numbers) > 1 else 0
-
-        # 🔒 Ограничения
-        if netto <= 0 or price <= 0 or netto > 100000 or price > 1000:
+        netto, price = extract_numbers_with_context(line)
+        if netto <= 0 or price <= 0:
             continue
-
         total = round(netto * price, 2)
 
         data.append({
@@ -164,8 +160,6 @@ def parse_excel_structured_table(filepath):
 
 def extract_text_from_file(file_path):
     text = ""
-
-    # PDF → изображение → OCR
     if file_path.lower().endswith(".pdf"):
         try:
             images = convert_from_path(file_path)
@@ -174,8 +168,6 @@ def extract_text_from_file(file_path):
                 text += ocr + "\n"
         except Exception as e:
             print(f"[OCR PDF ERROR] {e}")
-
-    # JPG / PNG → OCR
     elif file_path.lower().endswith((".jpg", ".jpeg", ".png")):
         try:
             image = Image.open(file_path)
@@ -183,7 +175,6 @@ def extract_text_from_file(file_path):
             text = ocr
         except Exception as e:
             print(f"[OCR IMAGE ERROR] {e}")
-
     return text
 
 @dp.message_handler(commands=['start'])
@@ -217,7 +208,7 @@ async def handle_zip(message: types.Message):
         return
     user_sessions[uid] = result_data
     preview = "\n".join([
-        f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес нетто (кг)']} кг | ${x['Сумма ($)']}" 
+        f"{x['Наименование товара']} | {x['Код ТН ВЭД']} | {x['Вес нетто (кг)']} кг | ${x['Сумма ($)']}"
         for x in result_data
     ])
     await message.answer(f"✅ Найдено {len(result_data)} позиций:\n\n{preview}\n\nНапиши 'готово' для генерации Excel.")
