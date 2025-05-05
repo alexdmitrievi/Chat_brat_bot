@@ -126,59 +126,36 @@ def parse_ocr_lines(text):
 def parse_excel_structured_table(filepath):
     df = pd.read_excel(filepath, header=None)
     data = []
-    header_index = None
-
-    for i, row in df.iterrows():
-        row_text = " ".join([str(cell).lower() for cell in row if pd.notnull(cell)])
-        if "наименование" in row_text and "вес" in row_text:
-            header_index = i
-            break
-
-    if header_index is None:
-        return data
-
-    df = df.iloc[header_index+1:]
     seen = set()
 
     for _, row in df.iterrows():
-        cells = [str(c).strip().lower() if pd.notnull(c) else "" for c in row]
-        line = " ".join(cells).replace(" ", "")  # удаляем пробелы внутри чисел
+        row_values = [str(cell).strip().lower() for cell in row if pd.notnull(cell)]
+        line = " ".join(row_values).replace(" ", "")
 
         if not any(k in line for k in catalog):
             continue
 
         name = next((k for k in catalog if k in line), None)
-        if name in seen:
+        if not name or name in seen:
             continue
         seen.add(name)
 
         tnved, trts, st1 = catalog[name]
-        places, netto, brutto, price = 0, 0, 0, 0
 
-        # вес: нетто / брутто
-        for c in cells:
-            if "/" in c and "кг" in c:
-                try:
-                    netto, brutto = c.replace("кг", "").replace(" ", "").split("/")
-                    netto = float(netto.replace(",", "."))
-                    brutto = float(brutto.replace(",", "."))
-                    break
-                except:
-                    continue
+        numbers = []
+        for word in row_values:
+            cleaned = word.replace("кг", "").replace("usd", "").replace("$", "").replace(",", ".").replace(" ", "")
+            try:
+                num = float(cleaned)
+                numbers.append(num)
+            except:
+                continue
 
-        # цена
-        for c in cells:
-            c_clean = c.replace(" ", "").replace("$", "").replace("usd", "").replace(",", ".")
-            if c_clean.replace(".", "").isdigit():
-                price = float(c_clean)
-                break
+        numbers = sorted(numbers, reverse=True)
+        netto = numbers[0] if len(numbers) > 0 else 0
+        price = numbers[1] if len(numbers) > 1 else 0
 
-        # места
-        digits = [int(c) for c in cells if c.isdigit()]
-        if digits:
-            places = digits[-1]
-
-        if netto == 0 and price == 0:
+        if netto == 0 or price == 0:
             continue
 
         total = round(netto * price, 2)
@@ -186,9 +163,9 @@ def parse_excel_structured_table(filepath):
         data.append({
             "Наименование товара": name,
             "Код ТН ВЭД": tnved,
-            "Кол-во мест": places,
+            "Кол-во мест": 0,
             "Вес нетто (кг)": netto,
-            "Вес брутто (кг)": brutto,
+            "Вес брутто (кг)": netto,
             "Цена за кг ($)": price,
             "Сумма ($)": total,
             "ТР ТС": trts,
@@ -197,16 +174,54 @@ def parse_excel_structured_table(filepath):
 
     return data
 
-def extract_text_from_file(file_path):
-    text = ""
-    if file_path.endswith(".pdf"):
-        images = convert_from_path(file_path)
-        for image in images:
-            text += pytesseract.image_to_string(image, lang='rus+eng') + "\n"
-    elif file_path.lower().endswith((".jpg", ".jpeg", ".png")):
-        image = Image.open(file_path)
-        text = pytesseract.image_to_string(image, lang='rus+eng')
-    return text
+def parse_ocr_lines(text):
+    lines = text.split("\n")
+    data = []
+    seen = set()
+
+    for line in lines:
+        raw = line.strip().lower().replace(" ", "")
+        if not any(k in raw for k in catalog):
+            continue
+
+        name = next((k for k in catalog if k in raw), None)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+
+        tnved, trts, st1 = catalog[name]
+
+        numbers = []
+        for w in line.split():
+            cleaned = w.replace("кг", "").replace("usd", "").replace("$", "").replace(",", ".").replace(" ", "")
+            try:
+                num = float(cleaned)
+                numbers.append(num)
+            except:
+                continue
+
+        numbers = sorted(numbers, reverse=True)
+        netto = numbers[0] if len(numbers) > 0 else 0
+        price = numbers[1] if len(numbers) > 1 else 0
+
+        if netto == 0 or price == 0:
+            continue
+
+        total = round(netto * price, 2)
+
+        data.append({
+            "Наименование товара": name,
+            "Код ТН ВЭД": tnved,
+            "Кол-во мест": 0,
+            "Вес нетто (кг)": netto,
+            "Вес брутто (кг)": netto,
+            "Цена за кг ($)": price,
+            "Сумма ($)": total,
+            "ТР ТС": trts,
+            "СТ-1": st1
+        })
+
+    return data
 
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
