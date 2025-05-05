@@ -52,9 +52,12 @@ catalog = {
 
 user_states = {}
 
-async def set_menu():
+async def on_startup(dp):
+    await bot.set_webhook(WEBHOOK_URL)
     await bot.set_my_commands([
         BotCommand("start", "Перезапустить бота"),
+        BotCommand("help", "Как работает бот"),
+        BotCommand("cancel", "Сбросить сессию")
     ])
 
 @dp.message_handler(commands=['start'])
