@@ -67,44 +67,32 @@ def parse_ocr_lines(text):
     seen = set()
 
     for line in lines:
-        line_raw = line.strip().lower()
-        line = line_raw.replace(" ", "")  # удаляем пробелы внутри чисел
-
-        if not line or not any(k in line for k in catalog):
+        raw = line.strip().lower().replace(" ", "")
+        if not any(k in raw for k in catalog):
             continue
 
-        name = next((k for k in catalog if k in line), None)
-        if name in seen:
+        name = next((k for k in catalog if k in raw), None)
+        if not name or name in seen:
             continue
         seen.add(name)
 
         tnved, trts, st1 = catalog[name]
-        netto, brutto, price = 0, 0, 0
 
-        # вес
-        if "/" in line and "кг" in line:
-            try:
-                weight_part = line.split("кг")[0]
-                netto, brutto = weight_part.split("/")
-                netto = float(netto.replace(",", "."))
-                brutto = float(brutto.replace(",", "."))
-            except:
-                pass
-        else:
-            try:
-                netto = float([w.replace(",", ".").replace("кг", "") for w in line.split() if "кг" in w][0])
-                brutto = netto
-            except:
-                pass
-
-        # цена
+        numbers = []
         for w in line.split():
-            w_clean = w.replace(" ", "").replace("$", "").replace("usd", "").replace(",", ".")
-            if w_clean.replace(".", "").isdigit():
-                price = float(w_clean)
-                break
+            cleaned = w.replace("кг", "").replace("usd", "").replace("$", "").replace(",", ".").replace(" ", "")
+            try:
+                num = float(cleaned)
+                numbers.append(num)
+            except:
+                continue
 
-        if netto == 0 and price == 0:
+        numbers = sorted(numbers, reverse=True)
+        netto = numbers[0] if len(numbers) > 0 else 0
+        price = numbers[1] if len(numbers) > 1 else 0
+
+        # 🔒 Ограничения
+        if netto <= 0 or price <= 0 or netto > 100000 or price > 1000:
             continue
 
         total = round(netto * price, 2)
@@ -114,7 +102,7 @@ def parse_ocr_lines(text):
             "Код ТН ВЭД": tnved,
             "Кол-во мест": 0,
             "Вес нетто (кг)": netto,
-            "Вес брутто (кг)": brutto,
+            "Вес брутто (кг)": netto,
             "Цена за кг ($)": price,
             "Сумма ($)": total,
             "ТР ТС": trts,
@@ -130,9 +118,8 @@ def parse_excel_structured_table(filepath):
 
     for _, row in df.iterrows():
         row_values = [str(cell).strip().lower() for cell in row if pd.notnull(cell)]
-        line = " ".join(row_values).replace(" ", "")  # удаление пробелов внутри чисел
+        line = " ".join(row_values).replace(" ", "")
 
-        # ищем товар по каталогу
         if not any(k in line for k in catalog):
             continue
         name = next((k for k in catalog if k in line), None)
@@ -142,7 +129,6 @@ def parse_excel_structured_table(filepath):
 
         tnved, trts, st1 = catalog[name]
 
-        # вытаскиваем все float-числа из строки
         numbers = []
         for word in row_values:
             cleaned = word.replace("кг", "").replace("usd", "").replace("$", "").replace(",", ".").replace(" ", "")
@@ -152,13 +138,12 @@ def parse_excel_structured_table(filepath):
             except:
                 continue
 
-        # сортируем: большее — вес, меньшее — цена
         numbers = sorted(numbers, reverse=True)
         netto = numbers[0] if len(numbers) > 0 else 0
         price = numbers[1] if len(numbers) > 1 else 0
 
-        # фильтрация мусора
-        if netto == 0 or price == 0:
+        # 🔒 Ограничения
+        if netto <= 0 or price <= 0 or netto > 100000 or price > 1000:
             continue
 
         total = round(netto * price, 2)
