@@ -1,16 +1,39 @@
-
 import os
 import logging
+import json
 import asyncio
 import pandas as pd
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import BotCommand
-from aiogram.utils import executor
+from aiogram.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.executor import start_webhook
 
+# Webhook config for Render
 API_TOKEN = os.getenv("BOT_TOKEN")
-logging.basicConfig(level=logging.INFO)
+WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://your-service.onrender.com")
+WEBHOOK_PATH = f"/webhook/{API_TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.environ.get("PORT", 8080))
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
+
+logging.basicConfig(level=logging.INFO)
+
+STATE_FILE = "user_states.json"
+
+def load_states():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_states(states):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(states, f, ensure_ascii=False, indent=2)
+
+user_states = load_states()
 
 catalog = {
     "томаты": ("0702 00 000 0", "Нужна", "Да"),
@@ -50,58 +73,89 @@ catalog = {
     "дыни": ("0807 19 000 0", "Нужна", "Да")
 }
 
-user_states = {}
+def is_valid_date(date_str):
+    try:
+        datetime.strptime(date_str, "%d.%m.%Y")
+        return True
+    except ValueError:
+        return False
 
-async def on_startup(dp):
-    await bot.set_webhook(WEBHOOK_URL)
-    await bot.set_my_commands([
-        BotCommand("start", "Перезапустить бота"),
-        BotCommand("help", "Как работает бот"),
-        BotCommand("cancel", "Сбросить сессию")
-    ])
-
-@dp.message_handler(commands=['start'])
-async def start(message: types.Message):
-    user_states[message.from_user.id] = {
+@dp.message_handler(commands=["start"])
+async def cmd_start(message: types.Message):
+    uid = str(message.from_user.id)
+    user_states[uid] = {
         "step": "product",
         "current": {},
-        "positions": [],
-        "invoice_number": "",
-        "invoice_date": "",
-        "cmr_number": "",
-        "cmr_date": ""
+        "positions": []
     }
-    await set_menu()
-    await message.answer("Привет! Давай соберём декларацию. Напиши наименование товара (например, 'томаты'):")
+    save_states(user_states)
+    await message.answer("Привет! Напиши название или часть названия товара (например, 'том').")
 
-@dp.message_handler(lambda msg: msg.from_user.id in user_states)
+@dp.message_handler(commands=["help"])
+async def cmd_help(message: types.Message):
+    await message.answer("Этот бот помогает подготовить Excel-декларацию для Альта-ГТД.
+/start — начать
+/cancel — сбросить сессию.")
+
+@dp.message_handler(commands=["cancel"])
+async def cmd_cancel(message: types.Message):
+    user_states.pop(str(message.from_user.id), None)
+    save_states(user_states)
+    await message.answer("❌ Сессия сброшена. Введите /start, чтобы начать заново.")
+
+@dp.message_handler(lambda msg: msg.text and msg.text.lower() in ["да", "нет"])
+async def yes_no_handler(message: types.Message):
+    uid = str(message.from_user.id)
+    state = user_states.get(uid, {})
+    if state.get("step") == "add_more":
+        if message.text.lower() == "да":
+            state["step"] = "product"
+            save_states(user_states)
+            await message.answer("Введите наименование следующего товара:")
+        else:
+            state["step"] = "invoice_number"
+            save_states(user_states)
+            await message.answer("Введи номер инвойса:")
+
+@dp.message_handler(lambda msg: msg.text)
 async def handle_input(message: types.Message):
-    state = user_states[message.from_user.id]
-    step = state["step"]
+    uid = str(message.from_user.id)
+    state = user_states.get(uid, {})
+    step = state.get("step")
     text = message.text.strip().lower()
 
     if step == "product":
-        if text not in catalog:
-            await message.answer("❌ Товар не найден в справочнике. Попробуй ещё раз.")
+        matches = [k for k in catalog if text in k]
+        if not matches:
+            await message.answer("❌ Товар не найден. Попробуйте ещё раз.")
             return
-        tnved, trts, st1 = catalog[text]
-        state["current"] = {
-            "Наименование товара": text,
-            "Код ТН ВЭД": tnved,
-            "ТР ТС": trts,
-            "СТ-1": st1,
-            "Страна происхождения": "Узбекистан",
-            "Страна отправления": "Узбекистан",
-            "Преференция": "Да",
-            "Ставка НДС (%)": 10
-        }
-        state["step"] = "netto"
-        await message.answer("Введи вес нетто (в кг):")
+        if len(matches) == 1:
+            name = matches[0]
+            tnved, trts, st1 = catalog[name]
+            state["current"] = {
+                "Наименование товара": name,
+                "Код ТН ВЭД": tnved,
+                "ТР ТС": trts,
+                "СТ-1": st1,
+                "Страна происхождения": "Узбекистан",
+                "Страна отправления": "Узбекистан",
+                "Преференция": "Да",
+                "Ставка НДС (%)": 10
+            }
+            state["step"] = "netto"
+            save_states(user_states)
+            await message.answer("Введи вес нетто (в кг):")
+        else:
+            markup = ReplyKeyboardMarkup(resize_keyboard=True)
+            for name in matches:
+                markup.add(KeyboardButton(name))
+            await message.answer("Выберите товар:", reply_markup=markup)
 
     elif step == "netto":
         try:
             state["current"]["Вес нетто (кг)"] = float(text.replace(",", "."))
             state["step"] = "brutto"
+            save_states(user_states)
             await message.answer("Введи вес брутто (в кг):")
         except:
             await message.answer("❌ Введи число, например: 350.5")
@@ -110,6 +164,7 @@ async def handle_input(message: types.Message):
         try:
             state["current"]["Вес брутто (кг)"] = float(text.replace(",", "."))
             state["step"] = "places"
+            save_states(user_states)
             await message.answer("Введи количество мест:")
         except:
             await message.answer("❌ Введи число, например: 360")
@@ -118,6 +173,7 @@ async def handle_input(message: types.Message):
         try:
             state["current"]["Кол-во мест"] = int(text)
             state["step"] = "price"
+            save_states(user_states)
             await message.answer("Введи цену за кг в долларах (например: 0.85):")
         except:
             await message.answer("❌ Введи целое число, например: 20")
@@ -131,49 +187,69 @@ async def handle_input(message: types.Message):
             state["positions"].append(current)
             state["current"] = {}
             state["step"] = "add_more"
+            save_states(user_states)
             await message.answer("✅ Позиция добавлена. Добавить ещё товар? (да/нет)")
         except:
             await message.answer("❌ Введи корректную цену, например: 1.25")
 
-    elif step == "add_more":
-        if text in ["да", "yes", "д"]:
-            state["step"] = "product"
-            await message.answer("Напиши наименование следующего товара:")
-        elif text in ["нет", "no", "н"]:
-            state["step"] = "invoice_number"
-            await message.answer("Введи номер инвойса:")
-        else:
-            await message.answer("Пожалуйста, ответь 'да' или 'нет'.")
-
     elif step == "invoice_number":
-        state["invoice_number"] = text
+        state["invoice_number"] = message.text.strip()
         state["step"] = "invoice_date"
+        save_states(user_states)
         await message.answer("Введи дату инвойса (например: 01.05.2025):")
 
     elif step == "invoice_date":
+        if not is_valid_date(text):
+            await message.answer("❌ Неверный формат даты. Пример: 01.05.2025")
+            return
         state["invoice_date"] = text
         state["step"] = "cmr_number"
+        save_states(user_states)
         await message.answer("Введи номер CMR:")
 
     elif step == "cmr_number":
-        state["cmr_number"] = text
+        state["cmr_number"] = message.text.strip()
         state["step"] = "cmr_date"
+        save_states(user_states)
         await message.answer("Введи дату CMR (например: 02.05.2025):")
 
     elif step == "cmr_date":
+        if not is_valid_date(text):
+            await message.answer("❌ Неверный формат даты. Пример: 02.05.2025")
+            return
         state["cmr_date"] = text
         df = pd.DataFrame(state["positions"])
         df["Номер инвойса"] = state["invoice_number"]
         df["Дата инвойса"] = state["invoice_date"]
         df["Номер CMR"] = state["cmr_number"]
         df["Дата CMR"] = state["cmr_date"]
-        file_path = f"declaration_{message.from_user.id}.xlsx"
+        file_path = f"declaration_{uid}.xlsx"
         df.to_excel(file_path, index=False)
         await message.answer_document(types.InputFile(file_path), caption="📄 Декларация готова!")
-        del user_states[message.from_user.id]
+        user_states.pop(uid, None)
+        save_states(user_states)
 
-if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.create_task(set_menu())
-    executor.start_polling(dp, skip_updates=True)
+async def on_startup(dp):
+    await bot.set_webhook(WEBHOOK_URL)
+    await bot.set_my_commands([
+        BotCommand("start", "Перезапустить бота"),
+        BotCommand("help", "Как работает бот"),
+        BotCommand("cancel", "Сбросить сессию")
+    ])
+    logging.info("Бот запущен с Webhook")
+
+async def on_shutdown(dp):
+    await bot.delete_webhook()
+    logging.info("Бот выключен")
+
+if __name__ == "__main__":
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        skip_updates=True,
+        host=WEBAPP_HOST,
+        port=WEBAPP_PORT,
+    )
 
