@@ -130,11 +130,11 @@ def parse_excel_structured_table(filepath):
 
     for _, row in df.iterrows():
         row_values = [str(cell).strip().lower() for cell in row if pd.notnull(cell)]
-        line = " ".join(row_values).replace(" ", "")
+        line = " ".join(row_values).replace(" ", "")  # удаление пробелов внутри чисел
 
+        # ищем товар по каталогу
         if not any(k in line for k in catalog):
             continue
-
         name = next((k for k in catalog if k in line), None)
         if not name or name in seen:
             continue
@@ -142,6 +142,7 @@ def parse_excel_structured_table(filepath):
 
         tnved, trts, st1 = catalog[name]
 
+        # вытаскиваем все float-числа из строки
         numbers = []
         for word in row_values:
             cleaned = word.replace("кг", "").replace("usd", "").replace("$", "").replace(",", ".").replace(" ", "")
@@ -151,10 +152,12 @@ def parse_excel_structured_table(filepath):
             except:
                 continue
 
+        # сортируем: большее — вес, меньшее — цена
         numbers = sorted(numbers, reverse=True)
         netto = numbers[0] if len(numbers) > 0 else 0
         price = numbers[1] if len(numbers) > 1 else 0
 
+        # фильтрация мусора
         if netto == 0 or price == 0:
             continue
 
@@ -174,54 +177,29 @@ def parse_excel_structured_table(filepath):
 
     return data
 
-def parse_ocr_lines(text):
-    lines = text.split("\n")
-    data = []
-    seen = set()
+def extract_text_from_file(file_path):
+    text = ""
 
-    for line in lines:
-        raw = line.strip().lower().replace(" ", "")
-        if not any(k in raw for k in catalog):
-            continue
+    # PDF → изображение → OCR
+    if file_path.lower().endswith(".pdf"):
+        try:
+            images = convert_from_path(file_path)
+            for image in images:
+                ocr = pytesseract.image_to_string(image, lang="rus+eng")
+                text += ocr + "\n"
+        except Exception as e:
+            print(f"[OCR PDF ERROR] {e}")
 
-        name = next((k for k in catalog if k in raw), None)
-        if not name or name in seen:
-            continue
-        seen.add(name)
+    # JPG / PNG → OCR
+    elif file_path.lower().endswith((".jpg", ".jpeg", ".png")):
+        try:
+            image = Image.open(file_path)
+            ocr = pytesseract.image_to_string(image, lang="rus+eng")
+            text = ocr
+        except Exception as e:
+            print(f"[OCR IMAGE ERROR] {e}")
 
-        tnved, trts, st1 = catalog[name]
-
-        numbers = []
-        for w in line.split():
-            cleaned = w.replace("кг", "").replace("usd", "").replace("$", "").replace(",", ".").replace(" ", "")
-            try:
-                num = float(cleaned)
-                numbers.append(num)
-            except:
-                continue
-
-        numbers = sorted(numbers, reverse=True)
-        netto = numbers[0] if len(numbers) > 0 else 0
-        price = numbers[1] if len(numbers) > 1 else 0
-
-        if netto == 0 or price == 0:
-            continue
-
-        total = round(netto * price, 2)
-
-        data.append({
-            "Наименование товара": name,
-            "Код ТН ВЭД": tnved,
-            "Кол-во мест": 0,
-            "Вес нетто (кг)": netto,
-            "Вес брутто (кг)": netto,
-            "Цена за кг ($)": price,
-            "Сумма ($)": total,
-            "ТР ТС": trts,
-            "СТ-1": st1
-        })
-
-    return data
+    return text
 
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
