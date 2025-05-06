@@ -93,9 +93,11 @@ async def cmd_start(message: types.Message):
 
 @dp.message_handler(commands=["help"])
 async def cmd_help(message: types.Message):
-    await message.answer("Этот бот помогает подготовить Excel-декларацию для Альта-ГТД.
-/start — начать
-/cancel — сбросить сессию.")
+    await message.answer(
+        "Этот бот помогает подготовить Excel-декларацию для Альта-ГТД.\n"
+        "/start — начать\n"
+        "/cancel — сбросить сессию."
+    )
 
 @dp.message_handler(commands=["cancel"])
 async def cmd_cancel(message: types.Message):
